@@ -1,0 +1,12 @@
+# Private origin URL / TLS flags
+embedded_local.py
+
+# Build artifacts (EXE may contain your baked SERVER_BASE_URL)
+dist/
+build/
+*.spec
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.pyc

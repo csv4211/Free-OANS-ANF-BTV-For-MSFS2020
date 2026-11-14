@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AMDB Map</title>
+  <link rel="stylesheet" href="/vendor/leaflet.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">AMDB MAP</div>
+    <form id="icaoForm" class="icao-form">
+      <input id="icao" type="text" maxlength="4" placeholder="ICAO" spellcheck="false" autocomplete="off" />
+      <button type="submit" data-i18n="load">Load</button>
+      <button type="button" id="nearestBtn" data-i18n="nearest" data-i18n-title="nearest_title">Nearest</button>
+    </form>
+    <div id="modeBadge" class="badge">ONLINE</div>
+    <div id="status" class="status" data-i18n="connecting">connecting…</div>
+    <label class="toggle"><input type="checkbox" id="follow" checked /> <span data-i18n="follow">follow</span></label>
+    <form id="routeForm" class="route-form">
+      <input id="route" type="text" spellcheck="false" autocomplete="off" placeholder='24C "E6" T6 L4 N7 B B6' />
+      <button type="submit" data-i18n="route">Route</button>
+      <button type="button" id="routeClear" data-i18n="clear">Clear</button>
+      <div id="routeStatus" class="route-status"></div>
+    </form>
+  </header>
+  <div id="map"></div>
+  <aside id="hud" class="hud">
+    <div><span>ICAO</span><b id="hudIcao">—</b></div>
+    <div><span>POS</span><b id="hudPos">—</b></div>
+    <div><span>HDG</span><b id="hudHdg">—</b></div>
+    <div><span>ALT</span><b id="hudAlt">—</b></div>
+    <div><span>GS/IAS</span><b id="hudSpd">—</b></div>
+    <div><span>SIM</span><b id="hudSim">—</b></div>
+  </aside>
+  <script src="/vendor/leaflet.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
