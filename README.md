@@ -1,9 +1,10 @@
 # AMDB OANS
 
+[English](README.md) · [Русский](README.ru.md)
+
 Local airport moving-map for Microsoft Flight Simulator 2020 — FlyByWire A380 OANS in the aircraft, plus a browser map on your PC.
 
-Notes: The client's source code is on GitHub and current documentation and application updates are available - https://github.com/csv4211/Free-OANS-ANF-BTV-For-MSFS2020
-исходный код клиента есть на гитхаб и актуальная документация и обновления приложения - https://github.com/csv4211/Free-OANS-ANF-BTV-For-MSFS2020
+Source code, docs, and app updates: https://github.com/csv4211/Free-OANS-ANF-BTV-For-MSFS2020
 
 ## What it does
 
@@ -26,7 +27,7 @@ Notes: The client's source code is on GitHub and current documentation and appli
 4. Turn on **Web map** and/or **OANS in the aircraft**.
 5. For OANS: start the sim with the FBW A380 and open the OANS/ND as usual.
 
-Notes: It is recommended to run AmdbOansClient.exe for the game itself.
+It is recommended to run `AmdbOansClient.exe` before starting the simulator.
 
 ## Notes
 
