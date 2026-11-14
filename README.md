@@ -27,7 +27,7 @@ Source code, docs, and app updates: https://github.com/csv4211/Free-OANS-ANF-BTV
 4. Turn on **Web map** and/or **OANS in the aircraft**.
 5. For OANS: start the sim with the FBW A380 and open the OANS/ND as usual.
 
-It is recommended to run `AmdbOansClient.exe` before starting the simulator.
+It is recommended to run AmdbOansClient.exe before starting the simulator.
 
 ## Notes
 
