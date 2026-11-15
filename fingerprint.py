@@ -1,4 +1,9 @@
-"""Hardware fingerprint — no files written."""
+"""Hardware fingerprint — separate parts (CPU / board / RAM / disk / machine).
+
+device_id is derived only from stable core (cpu + board + machine), so RAM/disk
+swap does not mint a new device. Each part is sent to the server so a ban still
+sticks if even one part matches a banned device.
+"""
 
 from __future__ import annotations
 
@@ -6,15 +11,25 @@ import hashlib
 import json
 import os
 import socket
-import uuid
 
 from embedded import CLIENT_VERSION
-from secretstore import file_sha256, is_activated, current_secret
+from secretstore import current_secret, file_sha256, is_activated
 from winproc import run_hidden
+
+# Core parts define device_id and must match for the same user.
+CORE_PARTS = ("cpu", "board", "ram")
+ALL_PARTS = ("cpu", "board", "ram", "disk", "machine")
 
 
 def _sha256_text(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _part_hash(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw or raw.lower() in ("none", "to be filled by o.e.m.", "default string", "0"):
+        return ""
+    return _sha256_text(raw)
 
 
 def machine_guid() -> str:
@@ -30,21 +45,39 @@ def machine_guid() -> str:
         return ""
 
 
-def _wmi_bundle() -> dict[str, str]:
+def _wmi_raw() -> dict[str, str]:
     if os.name != "nt":
         return {}
+    # One PowerShell round-trip for CPU / board / RAM / disk.
     ps = r"""
 $ErrorActionPreference='SilentlyContinue'
 $o=[ordered]@{}
-$o.uuid=(Get-CimInstance Win32_ComputerSystemProduct | Select-Object -First 1 -ExpandProperty UUID)
-$o.board=(Get-CimInstance Win32_BaseBoard | Select-Object -First 1 -ExpandProperty SerialNumber)
-$o.disk=(Get-CimInstance Win32_DiskDrive | Select-Object -First 1 -ExpandProperty SerialNumber)
+$cpu=(Get-CimInstance Win32_Processor | Select-Object -First 1)
+$o.cpu=(($cpu.ProcessorId),($cpu.Name),($cpu.UniqueId) -join '|')
+$prod=(Get-CimInstance Win32_ComputerSystemProduct | Select-Object -First 1)
+$board=(Get-CimInstance Win32_BaseBoard | Select-Object -First 1)
+$o.board=(($prod.UUID),($board.SerialNumber),($board.Product) -join '|')
+$ram=(Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
+  '{0}:{1}:{2}' -f $_.SerialNumber,$_.PartNumber,$_.Capacity
+} | Sort-Object) -join ';'
+$o.ram=$ram
+$disk=(Get-CimInstance Win32_DiskDrive | Select-Object -First 1)
+$o.disk=(($disk.SerialNumber),($disk.Model),($disk.Size) -join '|')
 $o | ConvertTo-Json -Compress
 """
     try:
         r = run_hidden(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps],
-            timeout=20,
+            [
+                "powershell",
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                ps,
+            ],
+            timeout=25,
         )
         data = json.loads((r.stdout or "").strip() or "{}")
         return {k: str(v).strip() for k, v in data.items() if v}
@@ -52,15 +85,38 @@ $o | ConvertTo-Json -Compress
         return {}
 
 
-def hardware_fingerprint() -> str:
-    parts = [
-        machine_guid(),
-        hex(uuid.getnode()),
-        socket.gethostname(),
-    ]
-    parts.extend(_wmi_bundle().values())
-    raw = "|".join(p for p in parts if p)
-    return _sha256_text(raw or "unknown-hw")
+def collect_hw_parts() -> dict[str, str]:
+    """Return {part_name: sha256_hex} for available components."""
+    raw = _wmi_raw()
+    parts: dict[str, str] = {}
+    for key in ("cpu", "board", "ram", "disk"):
+        h = _part_hash(raw.get(key, ""))
+        if h:
+            parts[key] = h
+    mg = _part_hash(machine_guid())
+    if mg:
+        parts["machine"] = mg
+    return parts
+
+
+def encode_hw_parts(parts: dict[str, str]) -> str:
+    """Compact header form: cpu=..,board=..,..."""
+    return ",".join(f"{k}={parts[k]}" for k in ALL_PARTS if parts.get(k))
+
+
+def device_id_from_parts(parts: dict[str, str]) -> str:
+    core = [f"{k}={parts[k]}" for k in CORE_PARTS if parts.get(k)]
+    if not core:
+        # Fallback: any parts we have
+        core = [f"{k}={parts[k]}" for k in ALL_PARTS if parts.get(k)]
+    return _sha256_text("|".join(core) or "unknown-hw")
+
+
+def hardware_fingerprint(parts: dict[str, str] | None = None) -> str:
+    """Legacy single string (HMAC / display): hash of all present parts."""
+    p = parts if parts is not None else collect_hw_parts()
+    blob = "|".join(f"{k}={p[k]}" for k in ALL_PARTS if p.get(k))
+    return _sha256_text(blob or "unknown-hw")
 
 
 def exe_hash() -> str:
@@ -68,10 +124,12 @@ def exe_hash() -> str:
 
 
 def collect_identity() -> dict[str, str]:
-    hw = hardware_fingerprint()
+    parts = collect_hw_parts()
+    did = device_id_from_parts(parts)
     return {
-        "device_id": hw,
-        "hw_fingerprint": hw,
+        "device_id": did,
+        "hw_fingerprint": hardware_fingerprint(parts),
+        "hw_parts": encode_hw_parts(parts),
         "exe_hash": exe_hash(),
         "hostname": socket.gethostname(),
         "client_version": CLIENT_VERSION,

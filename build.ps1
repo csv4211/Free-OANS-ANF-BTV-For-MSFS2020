@@ -1,4 +1,4 @@
-# Build AmdbOansClient.exe + AmdbOansUpdater.exe (+ Inno Setup installer).
+# Build AmdbOansClient.exe + AmdbOansUpdater.exe + AmdbOansUnregister.exe (+ Inno Setup).
 # Edit embedded.py before building.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -51,6 +51,7 @@ VSVersionInfo(
 
 Write-VersionInfo (Join-Path $PSScriptRoot 'version_info.txt') 'AMDB OANS Client' 'AmdbOansClient' 'AmdbOansClient.exe'
 Write-VersionInfo (Join-Path $PSScriptRoot 'version_info_updater.txt') 'AMDB OANS Updater' 'AmdbOansUpdater' 'AmdbOansUpdater.exe'
+Write-VersionInfo (Join-Path $PSScriptRoot 'version_info_unregister.txt') 'AMDB OANS Unregister' 'AmdbOansUnregister' 'AmdbOansUnregister.exe'
 
 $issPath = Join-Path $PSScriptRoot 'installer.iss'
 $iss = [System.IO.File]::ReadAllText($issPath)
@@ -119,9 +120,26 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller updater failed" }
 $upd = Join-Path $PSScriptRoot "dist\AmdbOansUpdater.exe"
 if (-not (Test-Path $upd)) { throw "Updater EXE not found: $upd" }
 
+# --- Unregister (local Cred Manager wipe only; no server delete) ---
+python -m PyInstaller `
+  --noconfirm `
+  --clean `
+  --name AmdbOansUnregister `
+  --windowed `
+  --onefile `
+  --version-file version_info_unregister.txt `
+  --paths "." `
+  --hidden-import cryptography `
+  .\run_unregister.py
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller unregister failed" }
+
+$unreg = Join-Path $PSScriptRoot "dist\AmdbOansUnregister.exe"
+if (-not (Test-Path $unreg)) { throw "Unregister EXE not found: $unreg" }
+
 $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
 Write-Host "Built: $exe"
 Write-Host "Built: $upd"
+Write-Host "Built: $unreg"
 Write-Host "STOCK_EXE_HASH=$hash"
 Write-Host "VERSION=$ver"
 

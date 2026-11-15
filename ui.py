@@ -16,7 +16,8 @@ from fingerprint import collect_identity
 from i18n import get_lang, set_lang, t
 from mitm import MitmService, is_admin
 from remote import RemoteAmdb
-from secretstore import finish_pending_replace, is_activated
+from secretstore import finish_pending_replace, is_activated, clear_device_secret
+from unregister import UnregisterError, launch_unregister, unregister_local
 from updater import UpdateError, check_for_update, launch_updater
 from web_bridge import WebOansService
 
@@ -277,6 +278,22 @@ class App:
         )
         self.quit_btn.pack(side=tk.RIGHT)
 
+        self.unreg_btn = tk.Button(
+            actions,
+            text=t("unregister"),
+            command=self._unregister_pc,
+            bg=BG,
+            fg=MUTED,
+            activebackground=BG_RAISED,
+            activeforeground=DANGER,
+            relief=tk.FLAT,
+            font=("Segoe UI", 10),
+            padx=12,
+            pady=9,
+            cursor="hand2",
+        )
+        self.unreg_btn.pack(side=tk.RIGHT, padx=(0, 4))
+
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
         self._activated = is_activated()
         self._status_key = "checking_server"
@@ -307,6 +324,7 @@ class App:
         self.oans_row.set_texts(t("oans_title"), t("oans_hint"))
         self.web_row.set_texts(t("web_title"), t("web_hint"))
         self.link.configure(text=t("open_web"))
+        self.unreg_btn.configure(text=t("unregister"))
         self.quit_btn.configure(text=t("quit"))
         self._apply_lang_buttons()
         # Same status, new language — do not re-query the server.
@@ -561,6 +579,45 @@ class App:
                 self.root.after(0, self._refresh_status)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _unregister_pc(self) -> None:
+        if not messagebox.askyesno(t("unreg_confirm_title"), t("unreg_confirm_body")):
+            return
+        self._set_status_key("unreg_launching", tone="warn")
+        try:
+            self.web.stop()
+        except Exception:
+            pass
+        try:
+            self.mitm.stop()
+        except Exception:
+            pass
+        try:
+            self.remote.clear_session()
+        except Exception:
+            pass
+
+        if getattr(sys, "frozen", False):
+            try:
+                launch_unregister()
+            except UnregisterError:
+                messagebox.showerror(t("unreg_title"), t("unreg_tool_missing"))
+                return
+            self.root.after(200, self._quit_for_updater)
+            return
+
+        # Dev / source run: clear here (no separate EXE).
+        try:
+            unregister_local()
+        except Exception:
+            try:
+                clear_device_secret()
+            except Exception:
+                messagebox.showerror(t("unreg_title"), t("unreg_failed"))
+                return
+        messagebox.showinfo(t("unreg_title"), t("unreg_done"))
+        self._activated = False
+        self.root.after(200, self._quit)
 
     def _quit(self) -> None:
         try:

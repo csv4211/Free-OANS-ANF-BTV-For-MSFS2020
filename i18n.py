@@ -73,6 +73,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "err_forbidden": "access denied",
         "err_unauthorized": "unauthorized",
         "err_not_found": "not found",
+        "unregister": "Unregister this PC",
+        "unreg_title": "Unregister this PC",
+        "unreg_confirm_title": "Unregister this PC?",
+        "unreg_confirm_body": (
+            "This removes the device secret from this computer only.\n"
+            "The device stays registered on the server.\n\n"
+            "The app will close and open the unregister tool."
+        ),
+        "unreg_confirm_hint": (
+            "Remove the device secret from this PC?\n"
+            "The server registration is not deleted."
+        ),
+        "unreg_working": "Removing local registration…",
+        "unreg_done": "Local registration removed. You can close this window.",
+        "unreg_failed": "Could not clear local registration.",
+        "unreg_yes": "Unregister",
+        "unreg_no": "Cancel",
+        "unreg_tool_missing": "Unregister tool not found (AmdbOansUnregister.exe).",
+        "unreg_launching": "Starting unregister…",
     },
     "ru": {
         "app_title": "AMDB OANS",
@@ -139,6 +158,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "err_forbidden": "доступ запрещён",
         "err_unauthorized": "нет доступа",
         "err_not_found": "не найдено",
+        "unregister": "Снять регистрацию с ПК",
+        "unreg_title": "Снятие регистрации",
+        "unreg_confirm_title": "Снять регистрацию с этого ПК?",
+        "unreg_confirm_body": (
+            "Секрет устройства будет удалён только с этого компьютера.\n"
+            "Запись на сервере останется.\n\n"
+            "Программа закроется и откроет инструмент снятия регистрации."
+        ),
+        "unreg_confirm_hint": (
+            "Удалить секрет устройства с этого ПК?\n"
+            "Регистрация на сервере не удаляется."
+        ),
+        "unreg_working": "Удаление локальной регистрации…",
+        "unreg_done": "Локальная регистрация снята. Можно закрыть окно.",
+        "unreg_failed": "Не удалось очистить локальную регистрацию.",
+        "unreg_yes": "Снять",
+        "unreg_no": "Отмена",
+        "unreg_tool_missing": "Не найден инструмент снятия (AmdbOansUnregister.exe).",
+        "unreg_launching": "Запуск снятия регистрации…",
     },
 }
 

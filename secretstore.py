@@ -67,8 +67,13 @@ def store_device_secret(secret: str) -> None:
 
 
 def clear_device_secret() -> None:
+    """Remove secret from Credential Manager and RAM. Does not touch the server."""
     global _runtime_secret
     _runtime_secret = None
+    try:
+        embedded.DEVICE_SECRET = placeholder()
+    except Exception:
+        pass
     try:
         cred_delete()
     except Exception:

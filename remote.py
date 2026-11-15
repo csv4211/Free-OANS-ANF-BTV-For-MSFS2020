@@ -88,7 +88,7 @@ class RemoteAmdb:
 
     def _identity_headers(self) -> dict[str, str]:
         ident = self.identity_fn()
-        return {
+        headers = {
             "Accept": "application/json",
             "User-Agent": f"amdb-oans-client/{ident.get('client_version', '1.0')}",
             "X-Device-Id": ident["device_id"],
@@ -97,6 +97,9 @@ class RemoteAmdb:
             "X-Hostname": ident.get("hostname") or "",
             "X-Client-Version": ident.get("client_version") or "",
         }
+        if ident.get("hw_parts"):
+            headers["X-Hw-Parts"] = ident["hw_parts"]
+        return headers
 
     def _urlopen(self, req: urllib.request.Request, timeout: float = 90):
         return urllib.request.urlopen(req, timeout=timeout, context=self._ctx())
@@ -316,6 +319,7 @@ class RemoteAmdb:
                 "proof": proof,
                 "device_id": ident["device_id"],
                 "hw_fingerprint": ident["hw_fingerprint"],
+                "hw_parts": ident.get("hw_parts") or "",
                 "exe_hash": exe_hash,
                 "hostname": ident.get("hostname") or "",
                 "client_version": ident.get("client_version") or "",
@@ -332,6 +336,7 @@ class RemoteAmdb:
                 "proof": proof,
                 "device_id": ident["device_id"],
                 "hw_fingerprint": ident["hw_fingerprint"],
+                "hw_parts": ident.get("hw_parts") or "",
                 "exe_hash": exe_hash,
                 "hostname": ident.get("hostname") or "",
                 "client_version": ident.get("client_version") or "",
