@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import ssl
+import time
 import urllib.error
 import urllib.request
 from typing import Callable
 from urllib.parse import urlparse
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from devauth import hmac_hex, proof_message
 from i18n import t
 from secretstore import current_secret, is_activated
 
 IdentityProvider = Callable[[], dict[str, str]]
+
+_MAP_AAD = b"amdb-map-v1"
+
+
+def _decrypt_map_body(content_key_hex: str, blob: bytes) -> bytes:
+    obj = json.loads(blob.decode("utf-8"))
+    if not isinstance(obj, dict) or int(obj.get("v") or 0) != 1:
+        raise ValueError("bad envelope")
+    key = bytes.fromhex(content_key_hex)
+    iv = base64.b64decode(obj["iv"])
+    ct = base64.b64decode(obj["ct"])
+    return AESGCM(key).decrypt(iv, ct, _MAP_AAD)
 
 
 def _looks_like_markup(text: str) -> bool:
@@ -54,6 +70,9 @@ class RemoteAmdb:
         self.identity_fn = identity_fn
         self.insecure_tls = insecure_tls
         self.ca_cert = ca_cert
+        self._session_token: str | None = None
+        self._session_exp: float = 0.0
+        self._content_key: str | None = None
 
     def _ctx(self) -> ssl.SSLContext | None:
         if not self.base_url.startswith("https://"):
@@ -95,7 +114,8 @@ class RemoteAmdb:
         except Exception:
             raise RuntimeError(friendly_http_error()) from None
 
-    def _auth_headers(self, method: str, path: str) -> dict[str, str]:
+    def _device_secret_headers(self, method: str, path: str) -> dict[str, str]:
+        """HMAC with long-lived device_secret (session mint / fallback)."""
         headers = self._identity_headers()
         if not is_activated():
             return headers
@@ -118,6 +138,75 @@ class RemoteAmdb:
         headers["X-Auth-Proof"] = proof
         return headers
 
+    def clear_session(self) -> None:
+        self._session_token = None
+        self._session_exp = 0.0
+        self._content_key = None
+
+    def ensure_session(self, *, force: bool = False) -> str:
+        """Get/refresh short-lived Bearer token (1–2h). Uses device_secret only here."""
+        now = time.time()
+        if (
+            not force
+            and self._session_token
+            and self._content_key
+            and now < self._session_exp - 120
+        ):
+            return self._session_token
+        if not is_activated():
+            raise RuntimeError(t("need_activation"))
+
+        path = "/v1/auth/session"
+        headers = self._device_secret_headers("POST", path)
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(self.identity_fn()).encode()
+        req = urllib.request.Request(self.base_url + path, data=data, headers=headers, method="POST")
+        try:
+            with self._urlopen(req, timeout=60) as resp:
+                obj = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            try:
+                obj = json.loads(body.decode(errors="replace"))
+                reason = str(obj.get("reason") or obj.get("error") or "").lower()
+                if reason in ("banned", "banned_hw"):
+                    raise RuntimeError(t("err_banned")) from None
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+            raise RuntimeError(friendly_http_error(e.code, body)) from None
+        except RuntimeError:
+            raise
+        except Exception:
+            raise RuntimeError(friendly_http_error()) from None
+
+        token = str(obj.get("access_token") or "")
+        map_ck = str(obj.get("content_key") or "")
+        if not obj.get("ok") or not token:
+            raise RuntimeError(str(obj.get("error") or obj.get("reason") or t("auth_error")))
+        expires_in = int(obj.get("expires_in") or 7200)
+        self._session_token = token
+        self._content_key = map_ck or None
+        self._session_exp = now + max(60, expires_in)
+        return token
+
+    def _auth_headers(self, method: str, path: str, *, require_session: bool = False) -> dict[str, str]:
+        headers = self._identity_headers()
+        if not is_activated():
+            return headers
+        try:
+            token = self.ensure_session()
+            if require_session and not self._content_key:
+                raise RuntimeError(t("auth_error"))
+            headers["Authorization"] = f"Bearer {token}"
+            return headers
+        except Exception:
+            if require_session:
+                raise
+            # Heartbeat only: HMAC fallback if session mint failed
+            return self._device_secret_headers(method, path)
+
     def post_json(self, path: str, payload: dict, *, signed: bool = False) -> dict:
         if not path.startswith("/"):
             path = "/" + path
@@ -130,10 +219,28 @@ class RemoteAmdb:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")
+            # Session expired → clear and retry once with fresh token / secret proof
+            if e.code == 403 and signed and is_activated():
+                try:
+                    obj = json.loads(detail)
+                    reason = str(obj.get("reason") or obj.get("error") or "").lower()
+                except Exception:
+                    reason = ""
+                if reason in ("bad_session", "missing_proof", "bad_challenge"):
+                    self.clear_session()
+                    try:
+                        headers = self._auth_headers("POST", path)
+                        headers["Content-Type"] = "application/json"
+                        req2 = urllib.request.Request(
+                            self.base_url + path, data=data, headers=headers, method="POST"
+                        )
+                        with self._urlopen(req2, timeout=60) as resp:
+                            return json.loads(resp.read().decode())
+                    except Exception:
+                        pass
             try:
                 obj = json.loads(detail)
                 if isinstance(obj, dict):
-                    # Keep machine codes for activate mapping; strip markup bodies
                     err = str(obj.get("error") or obj.get("reason") or "")
                     if _looks_like_markup(err) or len(err) > 120:
                         obj["error"] = friendly_http_error(e.code, detail)
@@ -144,16 +251,30 @@ class RemoteAmdb:
         except Exception:
             return {"ok": False, "error": friendly_http_error()}
 
+    def _maybe_decrypt(self, raw: bytes, enc_hdr: str | None) -> bytes:
+        if (enc_hdr or "").strip() != "1":
+            return raw
+        if not self._content_key:
+            raise RuntimeError(t("auth_error"))
+        try:
+            return _decrypt_map_body(self._content_key, raw)
+        except Exception:
+            raise RuntimeError(t("auth_error")) from None
+
     def get(self, path_qs: str) -> bytes:
         if not path_qs.startswith("/"):
             path_qs = "/" + path_qs
         route = urlparse(path_qs).path
-        headers = self._auth_headers("GET", route)
+        headers = self._auth_headers("GET", route, require_session=True)
         url = self.base_url + path_qs
         req = urllib.request.Request(url, headers=headers, method="GET")
         try:
             with self._urlopen(req, timeout=90) as resp:
-                return resp.read()
+                enc = resp.headers.get("X-AMDB-Enc")
+                raw = resp.read()
+                if enc != "1":
+                    raise RuntimeError(t("auth_error"))
+                return self._maybe_decrypt(raw, enc)
         except urllib.error.HTTPError as e:
             body = e.read()
             try:
@@ -161,9 +282,19 @@ class RemoteAmdb:
                 reason = str(obj.get("reason") or obj.get("error") or "").lower()
                 if reason in ("banned", "banned_hw"):
                     raise RuntimeError(t("err_banned")) from None
+                if reason in ("bad_session", "session_required") and is_activated():
+                    self.clear_session()
+                    headers = self._auth_headers("GET", route, require_session=True)
+                    req2 = urllib.request.Request(url, headers=headers, method="GET")
+                    with self._urlopen(req2, timeout=90) as resp:
+                        enc = resp.headers.get("X-AMDB-Enc")
+                        raw = resp.read()
+                        if enc != "1":
+                            raise RuntimeError(t("auth_error"))
+                        return self._maybe_decrypt(raw, enc)
             except RuntimeError:
                 raise
-            except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+            except Exception:
                 pass
             raise RuntimeError(friendly_http_error(e.code, body)) from None
         except RuntimeError:

@@ -1,11 +1,11 @@
-; Inno Setup — same packaging style as AMDB-Bridge-Setup (unsigned installer wrapper).
-; Build after .\build.ps1  →  dist\AMDB-OANS-Setup-<ver>.exe
+; Inno Setup — installs client + separate updater next to it.
 ; Requires Inno Setup 6: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "AMDB OANS"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Free OANS AMDB"
 #define MyAppExeName "AmdbOansClient.exe"
+#define MyUpdaterExeName "AmdbOansUpdater.exe"
 
 [Setup]
 AppId={{8F3C2A91-6B4E-4D2F-9A1C-AMDBOANS0001}
@@ -23,7 +23,6 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
-SetupIconFile=
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=AMDB OANS Setup
@@ -39,6 +38,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\{#MyUpdaterExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

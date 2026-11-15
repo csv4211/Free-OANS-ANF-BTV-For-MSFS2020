@@ -1,9 +1,8 @@
-# Build AmdbOansClient.exe (+ optional Inno Setup installer like AMDB-Bridge-Setup).
+# Build AmdbOansClient.exe + AmdbOansUpdater.exe (+ Inno Setup installer).
 # Edit embedded.py before building.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-# Sync VERSIONINFO from embedded.CLIENT_VERSION
 $verLine = (Select-String -Path .\embedded.py -Pattern '^\s*CLIENT_VERSION\s*=' | Select-Object -First 1).Line
 $ver = "1.0.0"
 if ($verLine -match '"([^"]+)"') { $ver = $Matches[1] }
@@ -11,7 +10,8 @@ $parts = @($ver -split '\.')
 while ($parts.Count -lt 4) { $parts += '0' }
 $v0 = [int]$parts[0]; $v1 = [int]$parts[1]; $v2 = [int]$parts[2]; $v3 = [int]$parts[3]
 
-$vi = @"
+function Write-VersionInfo([string]$OutPath, [string]$FileDescription, [string]$InternalName, [string]$OriginalFilename) {
+  $vi = @"
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
@@ -31,11 +31,11 @@ VSVersionInfo(
           u'040904B0',
           [
             StringStruct(u'CompanyName', u'Free OANS AMDB'),
-            StringStruct(u'FileDescription', u'AMDB OANS Client'),
+            StringStruct(u'FileDescription', u'$FileDescription'),
             StringStruct(u'FileVersion', u'$ver'),
-            StringStruct(u'InternalName', u'AmdbOansClient'),
+            StringStruct(u'InternalName', u'$InternalName'),
             StringStruct(u'LegalCopyright', u'Copyright (c) Free OANS AMDB'),
-            StringStruct(u'OriginalFilename', u'AmdbOansClient.exe'),
+            StringStruct(u'OriginalFilename', u'$OriginalFilename'),
             StringStruct(u'ProductName', u'AMDB OANS'),
             StringStruct(u'ProductVersion', u'$ver'),
           ]
@@ -46,9 +46,12 @@ VSVersionInfo(
   ]
 )
 "@
-[System.IO.File]::WriteAllText((Join-Path $PSScriptRoot 'version_info.txt'), $vi, [System.Text.UTF8Encoding]::new($false))
+  [System.IO.File]::WriteAllText($OutPath, $vi, [System.Text.UTF8Encoding]::new($false))
+}
 
-# Keep installer version in sync
+Write-VersionInfo (Join-Path $PSScriptRoot 'version_info.txt') 'AMDB OANS Client' 'AmdbOansClient' 'AmdbOansClient.exe'
+Write-VersionInfo (Join-Path $PSScriptRoot 'version_info_updater.txt') 'AMDB OANS Updater' 'AmdbOansUpdater' 'AmdbOansUpdater.exe'
+
 $issPath = Join-Path $PSScriptRoot 'installer.iss'
 $iss = [System.IO.File]::ReadAllText($issPath)
 $iss = [regex]::Replace($iss, '#define MyAppVersion "[\d.]+"', "#define MyAppVersion `"$ver`"")
@@ -57,6 +60,31 @@ $iss = [regex]::Replace($iss, '#define MyAppVersion "[\d.]+"', "#define MyAppVer
 python -m pip install -q pyinstaller SimConnect cryptography
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
+function Append-DeviceSlot([string]$ExePath) {
+  $prefix = "AMDB_DEVSEC_SLOT_v1="
+  $slot = $prefix + ("0" * 64)
+  $bytes = [System.IO.File]::ReadAllBytes($ExePath)
+  $ascii = [System.Text.Encoding]::ASCII
+  $prefBytes = $ascii.GetBytes($prefix)
+  $found = $false
+  for ($i = $bytes.Length - $prefBytes.Length; $i -ge 0; $i--) {
+    $ok = $true
+    for ($j = 0; $j -lt $prefBytes.Length; $j++) {
+      if ($bytes[$i + $j] -ne $prefBytes[$j]) { $ok = $false; break }
+    }
+    if ($ok) { $found = $true; break }
+  }
+  if (-not $found) {
+    $tail = $ascii.GetBytes($slot)
+    $out = New-Object byte[] ($bytes.Length + $tail.Length)
+    [Array]::Copy($bytes, 0, $out, 0, $bytes.Length)
+    [Array]::Copy($tail, 0, $out, $bytes.Length, $tail.Length)
+    [System.IO.File]::WriteAllBytes($ExePath, $out)
+    Write-Host "Appended device slot trailer to $(Split-Path $ExePath -Leaf)"
+  }
+}
+
+# --- Main client ---
 python -m PyInstaller `
   --noconfirm `
   --clean `
@@ -70,42 +98,33 @@ python -m PyInstaller `
   --hidden-import cryptography `
   --collect-all SimConnect `
   .\run_client.py
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller client failed" }
 
 $exe = Join-Path $PSScriptRoot "dist\AmdbOansClient.exe"
 if (-not (Test-Path $exe)) { throw "EXE not found: $exe" }
+Append-DeviceSlot $exe
 
-# Append uncompressed device slot at EOF (PyInstaller compresses strings inside; trailer stays patchable)
-$prefix = "AMDB_DEVSEC_SLOT_v1="
-$slot = $prefix + ("0" * 64)
-$bytes = [System.IO.File]::ReadAllBytes($exe)
-$ascii = [System.Text.Encoding]::ASCII
-$prefBytes = $ascii.GetBytes($prefix)
-$found = $false
-for ($i = $bytes.Length - $prefBytes.Length; $i -ge 0; $i--) {
-  $ok = $true
-  for ($j = 0; $j -lt $prefBytes.Length; $j++) {
-    if ($bytes[$i + $j] -ne $prefBytes[$j]) { $ok = $false; break }
-  }
-  if ($ok) { $found = $true; break }
-}
-if (-not $found) {
-  $tail = $ascii.GetBytes($slot)
-  $out = New-Object byte[] ($bytes.Length + $tail.Length)
-  [Array]::Copy($bytes, 0, $out, 0, $bytes.Length)
-  [Array]::Copy($tail, 0, $out, $bytes.Length, $tail.Length)
-  [System.IO.File]::WriteAllBytes($exe, $out)
-  Write-Host "Appended device slot trailer ($($tail.Length) bytes)"
-} else {
-  Write-Host "Device slot already present in EXE"
-}
+# --- Updater (no SimConnect / web) ---
+python -m PyInstaller `
+  --noconfirm `
+  --clean `
+  --name AmdbOansUpdater `
+  --windowed `
+  --onefile `
+  --version-file version_info_updater.txt `
+  --paths "." `
+  .\run_updater.py
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller updater failed" }
+
+$upd = Join-Path $PSScriptRoot "dist\AmdbOansUpdater.exe"
+if (-not (Test-Path $upd)) { throw "Updater EXE not found: $upd" }
 
 $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
 Write-Host "Built: $exe"
+Write-Host "Built: $upd"
 Write-Host "STOCK_EXE_HASH=$hash"
 Write-Host "VERSION=$ver"
 
-# Optional: Inno Setup wrapper (same idea as AMDB-Bridge-Setup-*.exe)
 $pf86 = ${env:ProgramFiles(x86)}
 $candidates = @(
   (Join-Path $env:LocalAppData 'Programs\Inno Setup 6\ISCC.exe'),
@@ -119,11 +138,10 @@ if ($iscc) {
   $setup = Join-Path $PSScriptRoot "dist\AMDB-OANS-Setup-$ver.exe"
   if (Test-Path $setup) {
     Write-Host "Installer: $setup"
-    Write-Host 'Publish the Setup EXE on GitHub Releases (better AV reputation).'
-    Write-Host 'Keep AmdbOansClient.exe for server/updates/ auto-update.'
+    Write-Host 'GitHub Releases: publish Setup.  server/updates/: AmdbOansClient.exe only.'
   }
 } else {
-  Write-Host 'Inno Setup not found - skipped installer. Install from https://jrsoftware.org/isinfo.php then re-run.'
+  Write-Host 'Inno Setup not found - skipped installer.'
 }
 
 Write-Host '1) Paste hash into server/embedded.py STOCK_EXE_HASH'

@@ -16,6 +16,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "update_restart": "Update installed. Restarting…",
         "update_failed": "Update failed",
         "update_missing": "Update not published on server (no EXE in updates/)",
+        "update_required_title": "Update required",
+        "update_required_body": (
+            "This app version is outdated and cannot be used.\n\n"
+            "Update to {version} now?"
+        ),
+        "update_declined": "Update declined — app cannot be used until updated",
+        "update_launching": "Starting updater…",
         "activating": "Activating…",
         "ready": "Ready",
         "ready_relaunch": "Ready. Close the app and open it again.",
@@ -75,6 +82,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "update_restart": "Обновление установлено. Перезапуск…",
         "update_failed": "Не удалось обновить",
         "update_missing": "Обновление не выложено на сервер (нет EXE в updates/)",
+        "update_required_title": "Нужно обновление",
+        "update_required_body": (
+            "Эта версия устарела и ей нельзя пользоваться.\n\n"
+            "Обновить до {version} сейчас?"
+        ),
+        "update_declined": "Обновление отклонено — без новой версии работать нельзя",
+        "update_launching": "Запуск обновлятора…",
         "activating": "Активация…",
         "ready": "Готово",
         "ready_relaunch": "Готово. Закройте программу и откройте снова.",

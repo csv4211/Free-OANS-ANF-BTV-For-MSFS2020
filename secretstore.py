@@ -1,8 +1,7 @@
-"""Device slot in EXE / embedded.py.
+"""Device secret storage.
 
-Strategy for frozen EXE:
-1) Try patch slot in-place (same file).
-2) Else write patched copy (*.tmp.exe), on exit replace original and delete the old one.
+Primary: Windows Credential Manager (per-user) — EXE is never patched.
+Legacy fallback: EOF trailer slot / embedded.py (migrated into Cred Manager on load).
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ import time
 from pathlib import Path
 
 import embedded
+from wincred import cred_delete, cred_read, cred_write
 
 _WIPED_APP_KEY = "0" * 64
 _runtime_secret: str | None = None
@@ -51,6 +51,28 @@ def set_runtime_secret(secret: str) -> None:
     global _runtime_secret
     _runtime_secret = secret
     embedded.DEVICE_SECRET = secret
+
+
+def store_device_secret(secret: str) -> None:
+    """Persist secret in Windows Credential Manager; keep in RAM for this process."""
+    secret = secret.lower().strip()
+    set_runtime_secret(secret)
+    if sys.platform == "win32":
+        cred_write(secret)
+    else:
+        # Dev fallback on non-Windows: still allow source runs
+        pass
+    if embedded.APP_KEY and embedded.APP_KEY != _WIPED_APP_KEY:
+        embedded.APP_KEY = _WIPED_APP_KEY
+
+
+def clear_device_secret() -> None:
+    global _runtime_secret
+    _runtime_secret = None
+    try:
+        cred_delete()
+    except Exception:
+        pass
 
 
 def binary_path() -> Path:
@@ -177,42 +199,52 @@ def _finish_pending_tmp(exe: Path) -> bool:
 
 
 def load_slot_if_any() -> bool:
+    """Load secret from Credential Manager (or migrate legacy EXE slot)."""
+    # 1) Windows Credential Manager
+    try:
+        sec = cred_read()
+        if sec and sec != placeholder():
+            set_runtime_secret(sec)
+            return True
+    except Exception:
+        pass
+
     if not getattr(sys, "frozen", False):
+        # Dev: embedded.py may already have a secret
         return is_activated()
 
     exe = Path(sys.executable)
     cleanup_leftovers(exe)
-
-    # Complete interrupted replace from previous session
     _finish_pending_tmp(exe if exe.suffix.lower() == ".exe" else exe)
 
-    # Running the main EXE
+    # 2) Legacy: secret patched into EXE trailer — migrate to Cred Manager
     sec = read_slot_secret(Path(sys.executable))
     if sec and sec != placeholder():
         set_runtime_secret(sec)
-        # Drop tmp if main already activated
-        tmp = _tmp_path(Path(sys.executable))
         try:
-            if tmp.exists() and read_slot_secret(tmp) == sec:
-                tmp.unlink()
-        except OSError:
+            cred_write(sec)
+        except Exception:
             pass
         return True
 
-    # Main still stock but tmp ready — try replace again
     main = Path(sys.executable)
     if _finish_pending_tmp(main):
+        if is_activated():
+            try:
+                cred_write(current_secret())
+            except Exception:
+                pass
         return is_activated()
 
     tmp = _tmp_path(main)
     if tmp.exists():
         sec = read_slot_secret(tmp)
         if sec and sec != placeholder():
-            # Keep using tmp content in RAM; schedule replace on exit
             set_runtime_secret(sec)
-            global _pending, _active_binary
-            _pending = (main, tmp)
-            _active_binary = tmp
+            try:
+                cred_write(sec)
+            except Exception:
+                pass
             return True
     return False
 

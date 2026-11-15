@@ -1,4 +1,4 @@
-"""Check origin for a newer stock EXE, replace self, relaunch."""
+"""Update check (main app) + download/replace helpers (updater EXE)."""
 
 from __future__ import annotations
 
@@ -45,11 +45,12 @@ def _ssl_ctx():
     return ssl.create_default_context()
 
 
-def fetch_manifest(remote: RemoteAmdb) -> dict:
+def fetch_manifest(remote: RemoteAmdb | None = None) -> dict:
     import json
     import urllib.request
 
-    url = remote.base_url.rstrip("/") + "/v1/client/update"
+    base = (remote.base_url if remote else embedded.SERVER_BASE_URL).rstrip("/")
+    url = base + "/v1/client/update"
     req = urllib.request.Request(
         url,
         headers={"Accept": "application/json", "User-Agent": f"amdb-oans-client/{embedded.CLIENT_VERSION}"},
@@ -62,16 +63,39 @@ def fetch_manifest(remote: RemoteAmdb) -> dict:
         raise UpdateError(str(e) or "update check failed") from None
 
 
-def download_update(remote: RemoteAmdb, manifest: dict) -> bytes:
+def check_for_update(remote: RemoteAmdb) -> dict:
+    """
+    Main app: only check, never download/replace.
+    Returns keys: available, version, package_missing, skipped, ...
+    """
+    try:
+        man = fetch_manifest(remote)
+    except UpdateError as e:
+        return {"available": False, "skipped": "check_failed", "error": str(e)}
+
+    remote_ver = str(man.get("version") or "").strip()
+    if remote_ver and not needs_update(remote_ver):
+        return {"available": False, "skipped": "up_to_date", "version": remote_ver}
+
+    if remote_ver and needs_update(remote_ver) and not man.get("update"):
+        return {"available": False, "skipped": "package_missing", "version": remote_ver}
+
+    if man.get("update") and remote_ver and needs_update(remote_ver):
+        return {"available": True, "version": remote_ver, "manifest": man}
+
+    return {"available": False, "skipped": "none", "version": remote_ver or None}
+
+
+def download_update(manifest: dict, *, base_url: str | None = None) -> bytes:
     import urllib.request
 
     path = str(manifest.get("url") or "/v1/client/download")
     if not path.startswith("/"):
         path = "/" + path
-    url = remote.base_url.rstrip("/") + path
+    url = (base_url or embedded.SERVER_BASE_URL).rstrip("/") + path
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": f"amdb-oans-client/{embedded.CLIENT_VERSION}"},
+        headers={"User-Agent": f"amdb-oans-updater/{embedded.CLIENT_VERSION}"},
         method="GET",
     )
     try:
@@ -87,36 +111,85 @@ def download_update(remote: RemoteAmdb, manifest: dict) -> bytes:
     size = manifest.get("size")
     if isinstance(size, int) and size > 0 and len(data) != size:
         raise UpdateError("update size mismatch")
-    if len(data) < 1024 * 100:
-        raise UpdateError("update too small")
+    if len(data) < 1024 * 100 or not data.startswith(b"MZ"):
+        raise UpdateError("update is not a valid EXE")
     return data
 
 
-def _spawn_replace_relaunch(original: Path, new_exe: Path) -> None:
+def updater_exe_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().with_name("AmdbOansUpdater.exe")
+    return Path(__file__).resolve().parent / "AmdbOansUpdater.exe"
+
+
+def launch_updater(*, wait_pid: int, target_exe: Path) -> None:
+    upd = updater_exe_path()
+    if not upd.is_file():
+        raise UpdateError("updater not found: " + str(upd))
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) # show updater UI — don't hide
+    # Updater has its own window; start without CREATE_NO_WINDOW
+    subprocess.Popen(
+        [
+            str(upd),
+            "--wait-pid",
+            str(wait_pid),
+            "--target",
+            str(target_exe),
+        ],
+        cwd=str(upd.parent),
+        close_fds=True,
+    )
+
+
+def replace_exe_and_relaunch(target: Path, data: bytes, *, wait_pid: int | None = None) -> None:
+    """Write target.update.exe, wait for pid, replace, start target."""
     if sys.platform != "win32":
-        raise UpdateError("auto-update only on Windows")
-    pid = os.getpid()
+        raise UpdateError("Windows only")
+    if not data.startswith(b"MZ"):
+        raise UpdateError("not a PE executable")
+
+    target = target.resolve()
+    tmp = target.with_name(target.stem + ".update" + target.suffix)
+    fd, part_name = tempfile.mkstemp(prefix=target.stem + "_", suffix=".part", dir=str(target.parent))
+    os.close(fd)
+    part = Path(part_name)
+    try:
+        part.write_bytes(data)
+        if tmp.exists():
+            tmp.unlink()
+        part.replace(tmp)
+    except Exception:
+        try:
+            if part.exists():
+                part.unlink()
+        except OSError:
+            pass
+        raise
+
+    pid = int(wait_pid or 0)
 
     def q(p: str) -> str:
         return "'" + p.replace("'", "''") + "'"
 
-    o = q(str(original))
-    n = q(str(new_exe))
+    o = q(str(target))
+    n = q(str(tmp))
+    wait = (
+        f"if ({pid} -gt 0) {{ while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) "
+        f"{{ Start-Sleep -Milliseconds 400 }} }}; "
+        if pid > 0
+        else ""
+    )
     ps = (
-        f"while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) "
-        f"{{ Start-Sleep -Milliseconds 400 }}; "
-        f"Start-Sleep -Milliseconds 900; "
+        wait
+        + f"Start-Sleep -Milliseconds 800; "
         f"$o = {o}; $n = {n}; "
         f"for ($i = 0; $i -lt 50; $i++) {{ "
         f"  try {{ if (Test-Path -LiteralPath $o) {{ Remove-Item -LiteralPath $o -Force -ErrorAction Stop }} ; break }} "
         f"  catch {{ Start-Sleep -Milliseconds 400 }} "
         f"}}; "
         f"if (Test-Path -LiteralPath $n) {{ Move-Item -LiteralPath $n -Destination $o -Force }}; "
-        f"Start-Sleep -Milliseconds 500; "
-        f"if (Test-Path -LiteralPath $o) {{ "
-        f"  $len = (Get-Item -LiteralPath $o).Length; "
-        f"  if ($len -gt 100000) {{ Start-Process -FilePath $o }} "
-        f"}}"
+        f"Start-Sleep -Milliseconds 400; "
+        f"if (Test-Path -LiteralPath $o) {{ Start-Process -FilePath $o }}"
     )
     si = subprocess.STARTUPINFO()
     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -135,7 +208,7 @@ def _spawn_replace_relaunch(original: Path, new_exe: Path) -> None:
             "-Command",
             ps,
         ],
-        cwd=str(original.parent),
+        cwd=str(target.parent),
         startupinfo=si,
         creationflags=flags,
         stdin=subprocess.DEVNULL,
@@ -143,87 +216,3 @@ def _spawn_replace_relaunch(original: Path, new_exe: Path) -> None:
         stderr=subprocess.DEVNULL,
         close_fds=True,
     )
-
-
-def apply_update_bytes(data: bytes) -> Path:
-    """Write clean stock EXE beside the running one and schedule replace+relaunch.
-
-    Device secret is NOT copied: after restart the stock EXE re-enrolls on the
-    same device_id/hw and binds itself (same as a fresh install on a known PC).
-    """
-    if not getattr(sys, "frozen", False):
-        raise UpdateError("auto-update only for frozen EXE")
-    if not data.startswith(b"MZ"):
-        raise UpdateError("update is not a valid EXE")
-
-    exe = Path(sys.executable).resolve()
-    tmp = exe.with_name(exe.stem + ".update" + exe.suffix)
-    fd, tmp_name = tempfile.mkstemp(prefix=exe.stem + "_", suffix=".part", dir=str(exe.parent))
-    os.close(fd)
-    part = Path(tmp_name)
-    try:
-        part.write_bytes(data)
-        if tmp.exists():
-            tmp.unlink()
-        part.replace(tmp)
-    except Exception:
-        try:
-            if part.exists():
-                part.unlink()
-        except OSError:
-            pass
-        raise
-
-    _spawn_replace_relaunch(exe, tmp)
-    return tmp
-
-
-def resume_pending_update() -> bool:
-    """If a previous update left *.update.exe, finish replace + relaunch."""
-    if not getattr(sys, "frozen", False):
-        return False
-    exe = Path(sys.executable).resolve()
-    upd = exe.with_name(exe.stem + ".update" + exe.suffix)
-    if not upd.is_file():
-        return False
-    if upd.resolve() == exe:
-        return False
-    try:
-        if upd.stat().st_size < 1024 * 100:
-            upd.unlink()
-            return False
-    except OSError:
-        return False
-    _spawn_replace_relaunch(exe, upd)
-    return True
-
-
-def check_and_update(remote: RemoteAmdb) -> dict:
-    """
-    If a newer client is published, download clean stock EXE + replace + relaunch.
-    Returns {"updated": False} or {"updated": True, ...} (caller must exit).
-    """
-    if not getattr(sys, "frozen", False):
-        return {"updated": False, "skipped": "not_frozen"}
-
-    if resume_pending_update():
-        return {"updated": True, "resumed": True}
-
-    try:
-        man = fetch_manifest(remote)
-    except UpdateError as e:
-        return {"updated": False, "skipped": "check_failed", "error": str(e)}
-
-    remote_ver = str(man.get("version") or "").strip()
-    if remote_ver and not needs_update(remote_ver):
-        return {"updated": False, "skipped": "up_to_date", "version": remote_ver}
-
-    if not man.get("update"):
-        # Server wants a newer version but published no EXE in updates/
-        if remote_ver and needs_update(remote_ver):
-            return {"updated": False, "skipped": "package_missing", "version": remote_ver}
-        return {"updated": False, "skipped": "none", "version": remote_ver or None}
-
-    data = download_update(remote, man)
-    new_path = apply_update_bytes(data)
-    return {"updated": True, "version": remote_ver, "path": str(new_path)}

@@ -1,3 +1,5 @@
+"""Build-time constants — edit before building the EXE. No config files at runtime."""
+
 SERVER_BASE_URL = ""
 
 # True for self-signed server cert; False for Let's Encrypt / public CA.

@@ -1,20 +1,17 @@
-"""First-run enroll → unwrap → patch → bind-exe."""
+"""First-run enroll → unwrap → store secret in Credential Manager → bind-exe."""
 
 from __future__ import annotations
-
-import sys
 
 import embedded
 from devauth import hmac_hex, proof_message, unwrap_secret
 from i18n import t
 from remote import RemoteAmdb
 from secretstore import (
-    file_sha256,
     is_activated,
     load_slot_if_any,
-    patch_device_secret,
     set_runtime_secret,
     stock_exe_hash,
+    store_device_secret,
 )
 
 
@@ -60,7 +57,7 @@ def _user_err(internal: str) -> ActivationError:
 
 
 def rebind_exe_hash(remote: RemoteAmdb, identity_refresh, exe_hash: str | None = None) -> dict:
-    """Re-bind device_secret → current EXE hash (after auto-update / patch)."""
+    """Re-bind device_secret → current EXE hash (after update)."""
     from secretstore import current_secret
 
     secret = current_secret()
@@ -115,11 +112,12 @@ def ensure_activated(remote: RemoteAmdb, identity_refresh) -> dict:
 
     set_runtime_secret(secret)
     try:
-        patched_path = patch_device_secret(secret)
+        store_device_secret(secret)
     except Exception:
         raise ActivationError("err_write_activation") from None
 
-    new_hash = file_sha256(patched_path).lower()
+    # EXE is not patched — bind the stock hash; secret lives in Credential Manager.
+    new_hash = stock_hash
     identity_refresh()
 
     ch2 = remote.fetch_challenge()
@@ -129,11 +127,9 @@ def ensure_activated(remote: RemoteAmdb, identity_refresh) -> dict:
         raise _user_err(str(bind.get("error") or bind.get("reason") or "bind failed"))
 
     identity_refresh()
-    needs_relaunch = getattr(sys, "frozen", False) and str(patched_path) != str(sys.executable)
     return {
         "ok": True,
         "already": False,
-        "patched_path": str(patched_path),
         "exe_hash": new_hash,
-        "needs_relaunch": needs_relaunch,
+        "needs_relaunch": False,
     }

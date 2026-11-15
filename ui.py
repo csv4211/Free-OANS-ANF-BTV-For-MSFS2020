@@ -7,6 +7,7 @@ import sys
 import threading
 import tkinter as tk
 import webbrowser
+from pathlib import Path
 from tkinter import messagebox
 
 import embedded
@@ -16,7 +17,7 @@ from i18n import get_lang, set_lang, t
 from mitm import MitmService, is_admin
 from remote import RemoteAmdb
 from secretstore import finish_pending_replace, is_activated
-from updater import UpdateError, check_and_update
+from updater import UpdateError, check_for_update, launch_updater
 from web_bridge import WebOansService
 
 # Night-deck palette (EFIS / OANS feel)
@@ -337,7 +338,7 @@ class App:
         colors = {"ok": OK, "err": DANGER, "warn": AMBER, "neutral": MUTED}
         self.dot.configure(fg=colors.get(self._status_tone, MUTED))
 
-    def _exit_for_update(self) -> None:
+    def _quit_for_updater(self) -> None:
         try:
             self.web.stop()
         except Exception:
@@ -352,26 +353,44 @@ class App:
             pass
         raise SystemExit(0)
 
+    def _offer_update(self, version: str) -> bool:
+        """Ask user to update. True = updater launched (caller must exit)."""
+        ok = messagebox.askyesno(
+            t("update_required_title"),
+            t("update_required_body", version=version or "?"),
+        )
+        if not ok:
+            self._set_status_key("update_declined", tone="err")
+            return False
+        self._set_status_key("update_launching", tone="warn")
+        try:
+            launch_updater(wait_pid=os.getpid(), target_exe=Path(sys.executable).resolve())
+        except Exception:
+            self._set_status_key("update_failed", tone="err")
+            return False
+        self.root.after(300, self._quit_for_updater)
+        return True
+
     def _boot_activate(self) -> None:
         self._set_status_key("checking_update", tone="warn")
 
         def work() -> None:
-            # 1) Auto-update before activation (works even if version is outdated)
+            # 1) Check update — main app never downloads; separate updater does.
             try:
-                upd = check_and_update(self.remote)
-                if upd.get("updated"):
-                    def _restart() -> None:
-                        self._set_status_key("update_restart", tone="warn")
-                        self.root.after(600, self._exit_for_update)
+                upd = check_for_update(self.remote)
+                if upd.get("available"):
+                    ver = str(upd.get("version") or "")
 
-                    self.root.after(0, _restart)
+                    def _ask() -> None:
+                        self._offer_update(ver)
+
+                    self.root.after(0, _ask)
                     return
                 if upd.get("skipped") == "package_missing":
                     self.root.after(0, lambda: self._set_status_key("update_missing", tone="err"))
                     return
             except UpdateError:
                 self.root.after(0, lambda: self._set_status_key("update_failed", tone="err"))
-                # Fall through — may still activate if versions match
             except Exception:
                 pass
 
