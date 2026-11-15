@@ -145,7 +145,8 @@ class App:
         self.web_url = f"http://127.0.0.1:{self.web.port}"
 
         self.root = tk.Tk()
-        self.root.title(t("app_title"))
+        ver = str(getattr(embedded, "CLIENT_VERSION", "") or "").strip() or "?"
+        self.root.title(f"{t('app_title')}  v{ver}")
         self.root.minsize(420, 420)
         self.root.geometry("440x450")
         self.root.configure(bg=BG)
@@ -166,6 +167,16 @@ class App:
         tk.Label(
             brand, text=" OANS", bg=BG, fg=TEXT, font=("Segoe UI Light", 22), anchor="w"
         ).pack(side=tk.LEFT)
+        ver = str(getattr(embedded, "CLIENT_VERSION", "") or "").strip() or "?"
+        self.version_lbl = tk.Label(
+            brand,
+            text=f"  v{ver}",
+            bg=BG,
+            fg=MUTED,
+            font=("Segoe UI", 10),
+            anchor="sw",
+        )
+        self.version_lbl.pack(side=tk.LEFT, pady=(10, 0))
 
         lang_row = tk.Frame(brand, bg=BG)
         lang_row.pack(side=tk.RIGHT)
@@ -320,7 +331,8 @@ class App:
         if code == get_lang():
             return
         set_lang(code)
-        self.root.title(t("app_title"))
+        ver = str(getattr(embedded, "CLIENT_VERSION", "") or "").strip() or "?"
+        self.root.title(f"{t('app_title')}  v{ver}")
         self.oans_row.set_texts(t("oans_title"), t("oans_hint"))
         self.web_row.set_texts(t("web_title"), t("web_hint"))
         self.link.configure(text=t("open_web"))
@@ -472,8 +484,30 @@ class App:
                         try:
                             rebind_exe_hash(self.remote, self._refresh_identity)
                             hb = self.remote.heartbeat()
+                            reason = str(hb.get("reason") or hb.get("error") or "").lower()
                         except Exception:
                             pass
+                    # Local secret present, server has no device → clear and enroll again
+                    if reason in ("not_enrolled", "unknown_device", "bad_proof"):
+                        try:
+                            self.remote.clear_session()
+                            clear_device_secret()
+                            self.root.after(0, lambda: self._set_status_key("activating", tone="warn"))
+                            result = ensure_activated(self.remote, self._refresh_identity)
+                            self._activated = True
+                            hb = self.remote.heartbeat()
+                            if result.get("needs_relaunch"):
+                                self.root.after(0, lambda: self._set_status_key("ready_relaunch", tone="warn"))
+                                return
+                        except ActivationError as e:
+                            self._activated = False
+                            key = getattr(e, "key", None) or "err_prepare_failed"
+                            self.root.after(0, lambda k=key: self._set_status_key(k, tone="err"))
+                            return
+                        except Exception:
+                            self._activated = False
+                            self.root.after(0, lambda: self._set_status_key("not_registered", tone="warn"))
+                            return
                 key, tone = self._status_key_from_server(hb if isinstance(hb, dict) else {})
                 self.root.after(0, lambda: self._set_status_key(key, tone=tone))
             except Exception:

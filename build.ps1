@@ -152,14 +152,15 @@ if ($pf86) { $candidates += (Join-Path $pf86 'Inno Setup 6\ISCC.exe') }
 $iscc = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
 if ($iscc) {
+  Write-Host "Compiling installer with: $iscc"
   & $iscc .\installer.iss
+  if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed (exit $LASTEXITCODE)" }
   $setup = Join-Path $PSScriptRoot "dist\AMDB-OANS-Setup-$ver.exe"
-  if (Test-Path $setup) {
-    Write-Host "Installer: $setup"
-    Write-Host 'GitHub Releases: publish Setup.  server/updates/: AmdbOansClient.exe only.'
-  }
+  if (-not (Test-Path $setup)) { throw "Installer not created: $setup" }
+  Write-Host "Installer: $setup"
+  Write-Host 'GitHub Releases: publish Setup.  server/updates/: AmdbOansClient.exe only.'
 } else {
-  Write-Host 'Inno Setup not found - skipped installer.'
+  Write-Host 'Inno Setup not found - skipped installer. Install from https://jrsoftware.org/isinfo.php'
 }
 
 Write-Host '1) Paste hash into server/embedded.py STOCK_EXE_HASH'

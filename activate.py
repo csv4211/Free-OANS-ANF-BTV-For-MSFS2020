@@ -7,11 +7,26 @@ from devauth import hmac_hex, proof_message, unwrap_secret
 from i18n import t
 from remote import RemoteAmdb
 from secretstore import (
+    clear_device_secret,
     is_activated,
     load_slot_if_any,
     set_runtime_secret,
     stock_exe_hash,
     store_device_secret,
+)
+
+# Keep stock key for re-enroll even after RAM wipe of embedded.APP_KEY.
+_STOCK_APP_KEY = (getattr(embedded, "APP_KEY", None) or "").strip()
+
+_ORPHAN_REASONS = frozenset(
+    {
+        "unknown_device",
+        "not_enrolled",
+        "not_registered",
+        "bad_proof",
+        "missing_proof",
+        "device_mismatch",
+    }
 )
 
 
@@ -76,13 +91,42 @@ def rebind_exe_hash(remote: RemoteAmdb, identity_refresh, exe_hash: str | None =
     return {"ok": True, "exe_hash": new_hash}
 
 
+def _server_reason(payload: dict | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("reason") or payload.get("error") or "").lower().strip()
+
+
+def _local_secret_orphaned(remote: RemoteAmdb) -> bool:
+    """True when this PC has a secret but the server has no matching device."""
+    try:
+        remote.clear_session()
+        hb = remote.heartbeat()
+    except Exception:
+        return False
+    reason = _server_reason(hb if isinstance(hb, dict) else None)
+    if reason in _ORPHAN_REASONS:
+        return True
+    # Session mint can also reveal a missing device before heartbeat.
+    if reason in ("bad_session",) or (isinstance(hb, dict) and hb.get("ok") is False and reason in _ORPHAN_REASONS):
+        return True
+    return False
+
+
 def ensure_activated(remote: RemoteAmdb, identity_refresh) -> dict:
     load_slot_if_any()
     if is_activated():
         identity_refresh()
-        return {"ok": True, "already": True}
+        if not _local_secret_orphaned(remote):
+            return {"ok": True, "already": True}
+        # Local activation left over, server record gone / new device_id — re-enroll.
+        try:
+            remote.clear_session()
+        except Exception:
+            pass
+        clear_device_secret()
 
-    app_key = (embedded.APP_KEY or "").strip()
+    app_key = _STOCK_APP_KEY or (embedded.APP_KEY or "").strip()
     if not app_key or app_key == "0" * 64:
         raise _user_err("APP_KEY missing")
 
