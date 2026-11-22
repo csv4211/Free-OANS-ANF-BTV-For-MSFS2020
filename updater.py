@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import embedded
@@ -116,33 +117,80 @@ def download_update(manifest: dict, *, base_url: str | None = None) -> bytes:
     return data
 
 
-def updater_exe_path() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().with_name("AmdbOansUpdater.exe")
-    return Path(__file__).resolve().parent / "AmdbOansUpdater.exe"
-
-
 def launch_updater(*, wait_pid: int, target_exe: Path) -> None:
-    upd = updater_exe_path()
-    if not upd.is_file():
-        raise UpdateError("updater not found: " + str(upd))
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) # show updater UI — don't hide
-    # Updater has its own window; start without CREATE_NO_WINDOW
+    """Start update UI from a helper copy of this app (same binary, different path)."""
+    from helperutil import client_argv_prefix
+
+    try:
+        argv = client_argv_prefix()
+    except Exception as e:
+        raise UpdateError(str(e) or "could not prepare updater") from e
+    cwd = str(target_exe.resolve().parent)
     subprocess.Popen(
         [
-            str(upd),
+            *argv,
+            "--update",
             "--wait-pid",
             str(wait_pid),
             "--target",
             str(target_exe),
         ],
-        cwd=str(upd.parent),
+        cwd=cwd,
         close_fds=True,
     )
 
 
+def _pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) == 0:
+            return False
+        return int(code.value) == STILL_ACTIVE
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def wait_for_pid(pid: int, *, timeout_sec: float = 120.0) -> None:
+    if pid <= 0:
+        return
+    deadline = time.time() + max(1.0, timeout_sec)
+    while time.time() < deadline and _pid_running(pid):
+        time.sleep(0.4)
+
+
+def swap_files(src: Path, dst: Path, *, retries: int = 50) -> None:
+    """Replace dst with src (delete dst, move src → dst). Pure Python, no PowerShell."""
+    src = src.resolve()
+    dst = dst.resolve()
+    for _ in range(max(1, retries)):
+        try:
+            if dst.exists():
+                dst.unlink()
+            break
+        except OSError:
+            time.sleep(0.4)
+    if not src.exists():
+        raise UpdateError("update file missing")
+    src.replace(dst)
+
+
 def replace_exe_and_relaunch(target: Path, data: bytes, *, wait_pid: int | None = None) -> None:
-    """Write target.update.exe, wait for pid, replace, start target."""
+    """Write update beside target, wait for old process, replace, relaunch — no PowerShell."""
     if sys.platform != "win32":
         raise UpdateError("Windows only")
     if not data.startswith(b"MZ"):
@@ -156,7 +204,10 @@ def replace_exe_and_relaunch(target: Path, data: bytes, *, wait_pid: int | None 
     try:
         part.write_bytes(data)
         if tmp.exists():
-            tmp.unlink()
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         part.replace(tmp)
     except Exception:
         try:
@@ -166,53 +217,12 @@ def replace_exe_and_relaunch(target: Path, data: bytes, *, wait_pid: int | None 
             pass
         raise
 
-    pid = int(wait_pid or 0)
-
-    def q(p: str) -> str:
-        return "'" + p.replace("'", "''") + "'"
-
-    o = q(str(target))
-    n = q(str(tmp))
-    wait = (
-        f"if ({pid} -gt 0) {{ while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) "
-        f"{{ Start-Sleep -Milliseconds 400 }} }}; "
-        if pid > 0
-        else ""
-    )
-    ps = (
-        wait
-        + f"Start-Sleep -Milliseconds 800; "
-        f"$o = {o}; $n = {n}; "
-        f"for ($i = 0; $i -lt 50; $i++) {{ "
-        f"  try {{ if (Test-Path -LiteralPath $o) {{ Remove-Item -LiteralPath $o -Force -ErrorAction Stop }} ; break }} "
-        f"  catch {{ Start-Sleep -Milliseconds 400 }} "
-        f"}}; "
-        f"if (Test-Path -LiteralPath $n) {{ Move-Item -LiteralPath $n -Destination $o -Force }}; "
-        f"Start-Sleep -Milliseconds 400; "
-        f"if (Test-Path -LiteralPath $o) {{ Start-Process -FilePath $o }}"
-    )
-    si = subprocess.STARTUPINFO()
-    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    si.wShowWindow = 0
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    wait_for_pid(int(wait_pid or 0))
+    time.sleep(0.8)
+    swap_files(tmp, target)
+    time.sleep(0.4)
     subprocess.Popen(
-        [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            ps,
-        ],
+        [str(target)],
         cwd=str(target.parent),
-        startupinfo=si,
-        creationflags=flags,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
         close_fds=True,
     )

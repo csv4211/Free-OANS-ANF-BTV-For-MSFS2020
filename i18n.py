@@ -22,16 +22,16 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Update to {version} now?"
         ),
         "update_declined": "Update declined — app cannot be used until updated",
-        "update_launching": "Starting updater…",
+        "update_launching": "Preparing update…",
         "activating": "Activating…",
         "ready": "Ready",
-        "ready_relaunch": "Ready. Close the app and open it again.",
         "server_ok": "Server online",
         "server_down": "No connection to server",
         "server_temp": "Server temporarily unavailable",
         "server_refuse": "Server unavailable or refused",
         "banned": "Access denied (banned)",
         "need_update": "A newer app version is required",
+        "need_update_fsto": "A newer version is required. Download it from flightsim.to",
         "device_mismatch": "Device does not match registration",
         "not_registered": "Device is not registered",
         "deny_all": "Server is closed for everyone",
@@ -79,7 +79,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "unreg_confirm_body": (
             "This PC will be unregistered on this computer only.\n"
             "The server entry is not deleted.\n\n"
-            "The app will close and open the unregister tool."
+            "The app will close after unregistering."
         ),
         "unreg_confirm_hint": (
             "Unregister this PC?\n"
@@ -90,8 +90,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "unreg_failed": "Could not unregister this PC.",
         "unreg_yes": "Unregister",
         "unreg_no": "Cancel",
-        "unreg_tool_missing": "Unregister tool not found (AmdbOansUnregister.exe).",
-        "unreg_launching": "Starting unregister…",
+        "unreg_launching": "Unregistering…",
     },
     "ru": {
         "app_title": "AMDB OANS",
@@ -107,16 +106,16 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Обновить до {version} сейчас?"
         ),
         "update_declined": "Обновление отклонено — без новой версии работать нельзя",
-        "update_launching": "Запуск обновлятора…",
+        "update_launching": "Подготовка обновления…",
         "activating": "Активация…",
         "ready": "Готово",
-        "ready_relaunch": "Готово. Закройте программу и откройте снова.",
         "server_ok": "Сервер на связи",
         "server_down": "Нет связи с сервером",
         "server_temp": "Сервер временно недоступен",
         "server_refuse": "Сервер недоступен или отказ",
         "banned": "Доступ запрещён (бан)",
         "need_update": "Нужна новая версия программы",
+        "need_update_fsto": "Нужна новая версия. Скачайте её с flightsim.to",
         "device_mismatch": "Устройство не совпадает с регистрацией",
         "not_registered": "Устройство не зарегистрировано",
         "deny_all": "Сервер закрыт для всех",
@@ -164,7 +163,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "unreg_confirm_body": (
             "Регистрация будет снята только с этого компьютера.\n"
             "Запись на сервере не удаляется.\n\n"
-            "Программа закроется и откроет инструмент снятия регистрации."
+            "После снятия программа закроется."
         ),
         "unreg_confirm_hint": (
             "Снять регистрацию с этого ПК?\n"
@@ -175,8 +174,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "unreg_failed": "Не удалось снять регистрацию с этого ПК.",
         "unreg_yes": "Снять",
         "unreg_no": "Отмена",
-        "unreg_tool_missing": "Не найден инструмент снятия (AmdbOansUnregister.exe).",
-        "unreg_launching": "Запуск снятия регистрации…",
+        "unreg_launching": "Снятие регистрации…",
     },
 }
 

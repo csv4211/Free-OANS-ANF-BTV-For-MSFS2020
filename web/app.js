@@ -595,19 +595,6 @@ function sampleLatLngs(feature) {
   return [];
 }
 
-function closestPoint(pts, target) {
-  let best = pts[0];
-  let bestD = Infinity;
-  for (const p of pts) {
-    const d = p.distanceTo(target);
-    if (d < bestD) {
-      bestD = d;
-      best = p;
-    }
-  }
-  return best;
-}
-
 function matchesFor(name) {
   const hits = rawFeatures.filter((f) => featureNames(f).has(name));
   const lines = hits.filter((f) => LINE_LAYERS.has(layerOf(f)));

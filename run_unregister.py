@@ -1,4 +1,4 @@
-"""Standalone unregister tool. Built as AmdbOansUnregister.exe — not the main client.
+"""Unregister UI / silent wipe. Invoked via AmdbOansClient.exe --unregister[--silent].
 
 Clears local Credential Manager registration only. Does not remove the device on the server.
 """
@@ -6,7 +6,6 @@ Clears local Credential Manager registration only. Does not remove the device on
 from __future__ import annotations
 
 import argparse
-import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox

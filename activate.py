@@ -175,5 +175,4 @@ def ensure_activated(remote: RemoteAmdb, identity_refresh) -> dict:
         "ok": True,
         "already": False,
         "exe_hash": new_hash,
-        "needs_relaunch": False,
     }

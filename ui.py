@@ -16,10 +16,21 @@ from fingerprint import collect_identity
 from i18n import get_lang, set_lang, t
 from mitm import MitmService, is_admin
 from remote import RemoteAmdb
-from secretstore import finish_pending_replace, is_activated, clear_device_secret
-from unregister import UnregisterError, launch_unregister, unregister_local
-from updater import UpdateError, check_for_update, launch_updater
+import channel
+from secretstore import cleanup_leftovers, is_activated, clear_device_secret
+from unregister import unregister_local
 from web_bridge import WebOansService
+
+if channel.AUTO_UPDATE:
+    from updater import UpdateError, check_for_update, launch_updater
+else:
+    UpdateError = RuntimeError  # type: ignore[misc, assignment]
+
+    def check_for_update(*_a, **_k):  # type: ignore[misc]
+        return {"available": False, "skipped": "disabled"}
+
+    def launch_updater(*_a, **_k):  # type: ignore[misc]
+        raise UpdateError("auto-update disabled")
 
 # Night-deck palette (EFIS / OANS feel)
 BG = "#0b1218"
@@ -146,7 +157,9 @@ class App:
 
         self.root = tk.Tk()
         ver = str(getattr(embedded, "CLIENT_VERSION", "") or "").strip() or "?"
-        self.root.title(f"{t('app_title')}  v{ver}")
+        ch_lbl = str(getattr(channel, "CHANNEL_LABEL", "") or "").strip()
+        title_extra = f"  [{ch_lbl}]" if ch_lbl else ""
+        self.root.title(f"{t('app_title')}  v{ver}{title_extra}")
         self.root.minsize(420, 420)
         self.root.geometry("440x450")
         self.root.configure(bg=BG)
@@ -167,10 +180,10 @@ class App:
         tk.Label(
             brand, text=" OANS", bg=BG, fg=TEXT, font=("Segoe UI Light", 22), anchor="w"
         ).pack(side=tk.LEFT)
-        ver = str(getattr(embedded, "CLIENT_VERSION", "") or "").strip() or "?"
+        ver_txt = f"  v{ver}" + (f" · {ch_lbl}" if ch_lbl else "")
         self.version_lbl = tk.Label(
             brand,
-            text=f"  v{ver}",
+            text=ver_txt,
             bg=BG,
             fg=MUTED,
             font=("Segoe UI", 10),
@@ -332,7 +345,9 @@ class App:
             return
         set_lang(code)
         ver = str(getattr(embedded, "CLIENT_VERSION", "") or "").strip() or "?"
-        self.root.title(f"{t('app_title')}  v{ver}")
+        ch_lbl = str(getattr(channel, "CHANNEL_LABEL", "") or "").strip()
+        title_extra = f"  [{ch_lbl}]" if ch_lbl else ""
+        self.root.title(f"{t('app_title')}  v{ver}{title_extra}")
         self.oans_row.set_texts(t("oans_title"), t("oans_hint"))
         self.web_row.set_texts(t("web_title"), t("web_hint"))
         self.link.configure(text=t("open_web"))
@@ -402,38 +417,39 @@ class App:
         return True
 
     def _boot_activate(self) -> None:
-        self._set_status_key("checking_update", tone="warn")
+        if channel.AUTO_UPDATE:
+            self._set_status_key("checking_update", tone="warn")
+        else:
+            self._set_status_key("activating", tone="warn")
 
         def work() -> None:
-            # 1) Check update — main app never downloads; separate updater does.
-            try:
-                upd = check_for_update(self.remote)
-                if upd.get("available"):
-                    ver = str(upd.get("version") or "")
+            if channel.AUTO_UPDATE:
+                # Main app never downloads; helper --update does.
+                try:
+                    upd = check_for_update(self.remote)
+                    if upd.get("available"):
+                        ver = str(upd.get("version") or "")
 
-                    def _ask() -> None:
-                        self._offer_update(ver)
+                        def _ask() -> None:
+                            self._offer_update(ver)
 
-                    self.root.after(0, _ask)
-                    return
-                if upd.get("skipped") == "package_missing":
-                    self.root.after(0, lambda: self._set_status_key("update_missing", tone="err"))
-                    return
-            except UpdateError:
-                self.root.after(0, lambda: self._set_status_key("update_failed", tone="err"))
-            except Exception:
-                pass
+                        self.root.after(0, _ask)
+                        return
+                    if upd.get("skipped") == "package_missing":
+                        self.root.after(0, lambda: self._set_status_key("update_missing", tone="err"))
+                        return
+                except UpdateError:
+                    self.root.after(0, lambda: self._set_status_key("update_failed", tone="err"))
+                except Exception:
+                    pass
 
             self.root.after(0, lambda: self._set_status_key("activating", tone="warn"))
             try:
-                result = ensure_activated(self.remote, self._refresh_identity)
+                ensure_activated(self.remote, self._refresh_identity)
                 self._activated = True
 
                 def _ok() -> None:
-                    if result.get("needs_relaunch"):
-                        self._set_status_key("ready_relaunch", tone="warn")
-                    else:
-                        self._set_status_key("ready", tone="ok")
+                    self._set_status_key("ready", tone="ok")
                     self._ping_server()
 
                 self.root.after(0, _ok)
@@ -441,7 +457,7 @@ class App:
                 self._activated = False
                 key = getattr(e, "key", None) or "err_prepare_failed"
                 if key in ("err_need_new_version", "need_update"):
-                    key = "update_missing"
+                    key = "need_update_fsto" if not channel.AUTO_UPDATE else "update_missing"
                 kw = dict(getattr(e, "kwargs", {}) or {})
                 self.root.after(
                     0,
@@ -461,7 +477,7 @@ class App:
         if reason in ("banned", "banned_hw"):
             return "banned", "err"
         if reason in ("client_version_mismatch",):
-            return "need_update", "err"
+            return ("need_update_fsto" if not channel.AUTO_UPDATE else "need_update"), "err"
         if reason in ("exe_hash_mismatch", "exe_not_bound", "hw_mismatch"):
             return "device_mismatch", "warn"
         if reason in ("not_enrolled", "unknown_device"):
@@ -493,12 +509,9 @@ class App:
                             self.remote.clear_session()
                             clear_device_secret()
                             self.root.after(0, lambda: self._set_status_key("activating", tone="warn"))
-                            result = ensure_activated(self.remote, self._refresh_identity)
+                            ensure_activated(self.remote, self._refresh_identity)
                             self._activated = True
                             hb = self.remote.heartbeat()
-                            if result.get("needs_relaunch"):
-                                self.root.after(0, lambda: self._set_status_key("ready_relaunch", tone="warn"))
-                                return
                         except ActivationError as e:
                             self._activated = False
                             key = getattr(e, "key", None) or "err_prepare_failed"
@@ -631,16 +644,6 @@ class App:
         except Exception:
             pass
 
-        if getattr(sys, "frozen", False):
-            try:
-                launch_unregister()
-            except UnregisterError:
-                messagebox.showerror(t("unreg_title"), t("unreg_tool_missing"))
-                return
-            self.root.after(200, self._quit_for_updater)
-            return
-
-        # Dev / source run: clear here (no separate EXE).
         try:
             unregister_local()
         except Exception:
@@ -663,7 +666,7 @@ class App:
         except Exception:
             pass
         try:
-            finish_pending_replace()
+            cleanup_leftovers()
         except Exception:
             pass
         self.root.destroy()

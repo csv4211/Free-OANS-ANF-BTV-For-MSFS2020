@@ -1,20 +1,20 @@
 """Hardware fingerprint — separate parts (CPU / board / RAM / disk / machine).
 
-device_id is derived only from stable core (cpu + board + machine), so RAM/disk
+device_id is derived only from stable core (cpu + board + ram), so disk
 swap does not mint a new device. Each part is sent to the server so a ban still
 sticks if even one part matches a banned device.
+
+Collection uses SMBIOS + storage IOCTL (no PowerShell).
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import socket
 
 from embedded import CLIENT_VERSION
 from secretstore import current_secret, file_sha256, is_activated
-from winproc import run_hidden
 
 # Core parts define device_id and must match for the same user.
 CORE_PARTS = ("cpu", "board", "ram")
@@ -46,43 +46,20 @@ def machine_guid() -> str:
 
 
 def _wmi_raw() -> dict[str, str]:
+    """Hardware raw strings. Name kept for call sites; no WMI/PowerShell."""
     if os.name != "nt":
         return {}
-    # One PowerShell round-trip for CPU / board / RAM / disk.
-    ps = r"""
-$ErrorActionPreference='SilentlyContinue'
-$o=[ordered]@{}
-$cpu=(Get-CimInstance Win32_Processor | Select-Object -First 1)
-$o.cpu=(($cpu.ProcessorId),($cpu.Name),($cpu.UniqueId) -join '|')
-$prod=(Get-CimInstance Win32_ComputerSystemProduct | Select-Object -First 1)
-$board=(Get-CimInstance Win32_BaseBoard | Select-Object -First 1)
-$o.board=(($prod.UUID),($board.SerialNumber),($board.Product) -join '|')
-$ram=(Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
-  '{0}:{1}:{2}' -f $_.SerialNumber,$_.PartNumber,$_.Capacity
-} | Sort-Object) -join ';'
-$o.ram=$ram
-$disk=(Get-CimInstance Win32_DiskDrive | Select-Object -First 1)
-$o.disk=(($disk.SerialNumber),($disk.Model),($disk.Size) -join '|')
-$o | ConvertTo-Json -Compress
-"""
+    out: dict[str, str] = {}
     try:
-        r = run_hidden(
-            [
-                "powershell",
-                "-NoProfile",
-                "-WindowStyle",
-                "Hidden",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                ps,
-            ],
-            timeout=25,
-        )
-        data = json.loads((r.stdout or "").strip() or "{}")
-        return {k: str(v).strip() for k, v in data.items() if v}
+        from hwinfo import read_disk_raw, read_smbios_parts
+
+        out.update({k: v for k, v in read_smbios_parts().items() if v})
+        disk = read_disk_raw()
+        if disk:
+            out["disk"] = disk
     except Exception:
-        return {}
+        pass
+    return out
 
 
 def collect_hw_parts() -> dict[str, str]:

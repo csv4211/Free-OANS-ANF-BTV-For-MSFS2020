@@ -1,9 +1,7 @@
-"""Standalone updater UI. Built as AmdbOansUpdater.exe — not the main client."""
+"""Update UI. Invoked via AmdbOansClient.exe --update."""
 
 from __future__ import annotations
 
-import argparse
-import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -52,23 +50,3 @@ def _run_ui(wait_pid: int, target: Path) -> None:
 
     threading.Thread(target=work, daemon=True).start()
     root.mainloop()
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--wait-pid", type=int, default=0)
-    ap.add_argument("--target", type=str, default="")
-    args = ap.parse_args()
-
-    if args.target:
-        target = Path(args.target)
-    elif getattr(sys, "frozen", False):
-        target = Path(sys.executable).resolve().with_name("AmdbOansClient.exe")
-    else:
-        target = Path(__file__).resolve().parent / "dist" / "AmdbOansClient.exe"
-
-    _run_ui(args.wait_pid or 0, target)
-
-
-if __name__ == "__main__":
-    main()

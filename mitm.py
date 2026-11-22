@@ -112,42 +112,26 @@ def _make_temp_mitm_cert(tmpdir: Path) -> tuple[Path, Path, str]:
 
 
 def _trust_cert(crt: Path) -> None:
-    ps = f"""
-$ErrorActionPreference='Stop'
-$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('{crt}')
-foreach ($storeName in @('My','Root')) {{
-  $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName,'LocalMachine')
-  $store.Open('ReadWrite')
-  $store.Add($cert)
-  $store.Close()
-}}
-$cert.Thumbprint
-"""
-    r = run_hidden(
-        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps],
-        timeout=60,
-    )
-    if r.returncode != 0:
-        raise RuntimeError(f"Failed to trust MITM cert:\n{r.stderr or r.stdout}")
+    """Install MITM cert into LocalMachine Root + My via certutil (no PowerShell)."""
+    errors: list[str] = []
+    for store in ("Root", "My"):
+        r = run_hidden(
+            ["certutil", "-addstore", "-f", store, str(crt)],
+            timeout=60,
+        )
+        if r.returncode != 0:
+            errors.append(f"{store}: {(r.stderr or r.stdout or '').strip()}")
+    if errors:
+        raise RuntimeError("Failed to trust MITM cert:\n" + "\n".join(errors))
 
 
 def _untrust_cert(thumbprint: str) -> None:
+    """Remove MITM cert by thumbprint via certutil (no PowerShell)."""
     if not thumbprint:
         return
-    ps = f"""
-$ErrorActionPreference='SilentlyContinue'
-$tp='{thumbprint}'
-foreach ($storeName in @('My','Root')) {{
-  $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName,'LocalMachine')
-  $store.Open('ReadWrite')
-  $store.Certificates | Where-Object {{ $_.Thumbprint -eq $tp }} | ForEach-Object {{ $store.Remove($_) }}
-  $store.Close()
-}}
-"""
-    run_hidden(
-        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps],
-        timeout=30,
-    )
+    tp = thumbprint.replace(" ", "").upper()
+    for store in ("Root", "My"):
+        run_hidden(["certutil", "-delstore", store, tp], timeout=30)
 
 
 def make_handler(remote: RemoteAmdb):
